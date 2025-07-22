@@ -1,6 +1,8 @@
 import cv2
 import requests
 import re
+import csv
+from datetime import datetime
 
 qrCode = cv2.QRCodeDetector() 
 cap = cv2.VideoCapture(0)
@@ -10,36 +12,41 @@ cuadro = 100 #define el tamaño del cuadro para el documento
 doc = 0
 
 detected_url = None
-search_result = None
+search_result = None 
 processing = False
-foundthis = "Elect"   #Término esencial a buscar
+#foundthis = "Elect"   #Término esencial a buscar
+foundthis = ["Electrónica"," Mecánica Eléctrica", "Electónica"] #Términos a buscar
 url_procesada = False #Para controlar si la URL ya ha sido procesada
 dominio_valido = "https://registro.usac.edu.gt/generaCarne/"
+
+
+#Archivo de registro
+log_file = "accessos.csv"
 
 if not cap.isOpened():
   print("No se puede abrir la cámara")
   exit()
-  
+
 
 def searchthis(url, foundthis):
     #Buscar un término especifico en el contenido del carne del usuario
     try:
         response = requests.get(url, timeout=5)
         response.raise_for_status()
+        html_content = response.text
 
-        #Buscar coincidencias, sin importar mayúsculas o minúsculas
-        matches = re.findall(foundthis, response.text, re.IGNORECASE)
-        if matches:
-            #Encontramos el término
-            return True, f"Se encontró '{foundthis}'"
-            #Añadir función para habilitar el acceso a la puerta de acceso al labortorio
-            
-
-        else:
-            #El término no está presente
-            
-            #añadir función para denegar el acceso a la puerta de acceso al laboratorio
-            return False, f"'{foundthis}' no encontrado"
+        
+        # Buscar términos
+        found_any = False
+        results = {}
+        
+        for term in foundthis:
+            matches = re.findall(term, html_content, re.IGNORECASE)
+            results[term] = len(matches)
+            if matches:
+                found_any = True
+        
+        return found_any, results
         
     except Exception as e:
         return False, f"Error: {str(e)}"
