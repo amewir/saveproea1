@@ -5,6 +5,9 @@ import time
 import os
 import csv
 from datetime import datetime
+import psycopg2
+from bs4 import BeautifulSoup
+import pandas as pd
 
 qrCode = cv2.QRCodeDetector() 
 cap = cv2.VideoCapture(0)
@@ -12,13 +15,26 @@ cap = cv2.VideoCapture(0)
 # Variables Globales
 cuadro = 100
 detected_url = None
-foundthis = "Electr"
+foundthis = "Electr"    
 dominio_valido = "https://registro.usac.edu.gt/generaCarne/"
 ultimo_resultado = None
 ultimo_color = None
 ultimo_mensaje = None
 tiempo_mensaje = 0
 duracion_mensaje = 5  # Duración del mensaje en segundos
+
+estado_laboratorio = {}
+ultimo_carne_procesado = None
+tiempo_ultimo_escaneo = 0
+
+conn = psycopg2.connect(
+    database = "db_ea1proyecto",
+    user = "postgres",  
+    password = "whatsapp",
+    host = "localhost",
+    port = "5432")
+cur = conn.cursor()
+
 
 if not cap.isOpened():
   print("No se puede abrir la cámara")
@@ -28,7 +44,7 @@ if not cap.isOpened():
 if not os.path.exists('accesos_permitidos.csv'):
     with open('accesos_permitidos.csv', 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(['FechaHora', 'Nombre', 'Carne', 'Estado'])
+        writer.writerow(['Entrada', 'Nombre', 'Carne', 'CUI', 'Estado', 'Salida'])
 
 def searchthis(url, foundthis):
     try:
@@ -86,7 +102,7 @@ while True:
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                     
                     # Procesar nuevo QR detectado
-                    if detected_url != info:
+                    if detected_url != info or ((ultimo_carne_procesado and tiempo_actual - tiempo_ultimo_escaneo > 20)):
                         detected_url = info
                         pertenece = searchthis(info, foundthis)
                         
@@ -95,16 +111,58 @@ while True:
                             ultimo_color = (0, 255, 0)
                             datos = extraer_datos(info)
                             if datos:
+                                carne = datos['Carne']
+                                if carne in estado_laboratorio:
+                                    if estado_laboratorio[carne]:  # Si ya está dentro
+                                        accion = "SALIDA"
+                                        estado_laboratorio[carne] = False
+                                        color_accion = (0, 0, 255)  # Rojo para salida
+                                    else:  # Si está fuera
+                                        accion = "ENTRADA"
+                                        estado_laboratorio[carne] = True
+                                        color_accion = (0, 255, 0)  # Verde para entrada
+                                else:
+                                    # Primera vez que se escanea (registrar entrada)
+                                    accion = "ENTRADA"
+                                    estado_laboratorio[carne] = True
+                                    color_accion = (0, 255, 0)
+                                
+                                # Actualizar mensajes
+                                ultimo_resultado = f"Acceso {accion}"
+                                ultimo_color = color_accion
+                                ultimo_mensaje = f"{datos['Nombre']} | {datos['Carne']} | {accion}"
+                                ultimo_carne_procesado = carne
+                                tiempo_ultimo_escaneo = tiempo_actual
+                                
+                                
 
-                                ultimo_mensaje = f"{datos['Nombre']} | {datos['Carne']}"
                             # Guardar en CSV
                             with open('accesos_permitidos.csv', 'a', newline='', encoding='utf-8') as f:
                                 writer = csv.writer(f)
-                                writer.writerow([
-                                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                
+                                # Registrar entrada
+                                if accion == "ENTRADA":
+                                    hora_entrada = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                                    writer.writerow([
+                                        datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                        datos['Nombre'],
+                                        datos['Carne'],
+                                        datos['CUI'],
+                                        'Permitido',
+                                        ''
+                                    ])
+                                # Registrar salida
+                                elif accion == "SALIDA":
+                                    
+                                    writer.writerow([
+                                    hora_entrada,
                                     datos['Nombre'],
                                     datos['Carne'],
-                                    'Permitido'
+                                    datos['CUI'],
+                                    'Permitido',
+                                #salida
+                                datetime.now().strftime('%Y-%m-%d %H:%M:%S') if accion == "SALIDA" else ''
+
                             ])
                         else:
                             ultimo_resultado = "Acceso DENEGADO, no pertenece a EIME"
@@ -143,6 +201,23 @@ while True:
     
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break 
-    
+
+df = pd.read_csv('accesos_permitidos.csv', encoding='utf-8')
+
+for index, row in df.iterrows():
+        insert_query = """
+        INSERT INTO accesos_permitidos (entrada, nombre, carne, cui, estado, salida)
+        VALUES (%s, %s, %s, %s, %s, %s);"""
+        values = list(row)
+        
+        try:
+            cur.execute(insert_query, values)
+            conn.commit()
+        except Exception as e:
+            print(f"Error al insertar fila {index + 1}: {e}")
+            conn.rollback()
+conn.commit()
+conn.close() 
+
 cap.release()
 cv2.destroyAllWindows()
